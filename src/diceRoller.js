@@ -15,6 +15,22 @@ let simSpeed = 20;
 let blockRollButton = false;
 let sharedRollId = null;
 
+const stateIconImages = [];
+const stateIconsReady = Promise.all([
+    'no_player.svg',
+    'no_player_hover.svg',
+    'single_player.svg',
+    'single_player_hover.svg',
+    'multi_player.svg',
+    'multi_player_hover.svg',
+].map(src => new Promise(resolve => {
+        const image = new Image();
+        image.onload = image.onerror = resolve;
+        image.src = src;
+        stateIconImages.push(image);
+    })),
+);
+
 const REMOTE_BROADCAST_INTERVAL = 250;
 let remoteBroadcastQueue = Promise.resolve();
 let nextRemoteBroadcastAt = 0;
@@ -446,7 +462,11 @@ export async function setupDiceRoller(id) {
 
     const attackCommandInput = document.getElementById('attackCommand');
     attackCommandInput.disabled = false;
-    document.getElementById('rollButton').disabled = false;
+    const rollButton = document.getElementById('rollButton');
+    rollButton.disabled = false;
+    rollButton.title = 'Roll';
+    rollButton.setAttribute('aria-busy', 'false');
+    rollButton.textContent = 'Roll';
 
     const examples = [
         '5a+4 vs {ac} dmg {count}d6fi+{bonus}bl+1d4',
@@ -465,34 +485,11 @@ export async function setupDiceRoller(id) {
 
     attackCommandInput.value = textToEmoji(randomExample);
     const historyContainer = document.getElementById('history');
-    const rollButton = document.getElementById('rollButton');
-
-    
     const logStateButton = document.getElementById('logStateButton');
     const simStateButton = document.getElementById('simStateButton');
 
     logState = "local"; // default: 1 means local logging only
     simState = "local";
-
-    // NEW: Function to update the log state icon.
-
-    function preloadSVGs() {
-        const icons = [
-          "no_player.svg",
-          "no_player_hover.svg",
-          "single_player.svg",
-          "single_player_hover.svg",
-          "multi_player.svg",
-          "multi_player_hover.svg"
-        ];
-        icons.forEach(src => {
-          const img = new Image();
-          img.src = src;
-        });
-      }
-      
-    // Preload images immediately on page load.
-    preloadSVGs();
 
     function updateLogStateIcon() {
         let icon;
@@ -539,7 +536,7 @@ export async function setupDiceRoller(id) {
         updateSimStateIcon();
     });
 
-    // NEW: Initialize icons on page load.
+    await stateIconsReady;
     updateLogStateIcon();
     updateSimStateIcon();
 
