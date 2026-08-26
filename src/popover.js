@@ -189,6 +189,21 @@ let viewportWidth = 1920;
 let viewportHeight = 1080;
 let displayWidth = 100;
 let displayHeight = 100;
+let popoverWidth = null;
+let popoverHeight = null;
+
+async function setPopoverSize(width, height) {
+    const updates = [];
+    if (width !== popoverWidth) {
+        updates.push(OBR.popover.setWidth("quickdice-popover", width));
+    }
+    if (height !== popoverHeight) {
+        updates.push(OBR.popover.setHeight("quickdice-popover", height));
+    }
+    await Promise.all(updates);
+    popoverWidth = width;
+    popoverHeight = height;
+}
 
 async function resizeCanvas() {
 
@@ -205,9 +220,7 @@ async function resizeCanvas() {
     //displayWidth = canvasWidth;
     //displayHeight = canvasHeight;
 
-    let prom1 = OBR.popover.setWidth("quickdice-popover", displayWidth);
-    let prom2 = OBR.popover.setHeight("quickdice-popover", displayHeight);
-    await Promise.all([prom1, prom2]);
+    await setPopoverSize(displayWidth, displayHeight);
 
     const canvas = document.getElementById('popover-dice-canvas');
     const container = document.getElementById('popover-container');
@@ -257,9 +270,7 @@ function showPopover() {
 async function hidePopover() {
     document.body.style.display = 'none';
     document.body.style.pointerEvents = 'none';
-    let prom1 = OBR.popover.setWidth("quickdice-popover", 2);
-    let prom2 = OBR.popover.setHeight("quickdice-popover", 2);
-    await Promise.all([prom1, prom2]);
+    await setPopoverSize(2, 2);
 }
 
 async function broadcastResult(result, data) {

@@ -13,34 +13,38 @@ let canvasWidth;
 let canvasHeight;
 let simSpeed = 20;
 let blockRollButton = false;
+let sharedRollId = null;
+
+const REMOTE_BROADCAST_INTERVAL = 250;
+let remoteBroadcastQueue = Promise.resolve();
+let nextRemoteBroadcastAt = 0;
+
+function sendRemoteMessage(channel, data) {
+    const send = async () => {
+        const wait = Math.max(0, nextRemoteBroadcastAt - Date.now());
+        if (wait > 0) {
+            await new Promise(resolve => setTimeout(resolve, wait));
+        }
+        nextRemoteBroadcastAt = Date.now() + REMOTE_BROADCAST_INTERVAL;
+        return OBR.broadcast.sendMessage(channel, data, { destination: 'REMOTE' });
+    };
+
+    const result = remoteBroadcastQueue.then(send, send);
+    remoteBroadcastQueue = result.catch(() => {});
+    return result;
+}
 
 /**
  * Debounce functions for better performance
  * (c) 2021 Chris Ferdinandi, MIT License, https://gomakethings.com
  * @param  {Function} fn The function to debounce
  */
-export const debounce = (fn) => {
-
-	// Setup a timer
-	let timeout;
-
-	// Return a function to run debounced
-	return function () {
-
-		// Setup the arguments
-		let context = this;
-		let args = arguments;
-
-		// If there's a timer, cancel it
-		if (timeout) {
-			window.cancelAnimationFrame(timeout);
-		}
-
-		// Setup the new requestAnimationFrame()
-		timeout = window.requestAnimationFrame(function () {
-			fn.apply(context, args);
-		});
-	};
+export const debounce = (fn, delay = 250) => {
+    let timeout;
+    return function (...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => fn.apply(this, args), delay);
+    };
 }
 
 function rollDice(number, diceType) {
@@ -118,22 +122,26 @@ function time_config() {
 }
 
 function clearSharedRoll() {
-    OBR.broadcast.sendMessage("quickdice.popoverRemove", {
-        'id': rollId
-    }, { destination: 'REMOTE' })
+    if (!sharedRollId) {
+        return Promise.resolve();
+    }
+
+    const id = sharedRollId;
+    sharedRollId = null;
+    return sendRemoteMessage("quickdice.popoverRemove", { id })
     .catch(error => {
         console.error(`Failed to send closePopover message for ID ${id}:`, error);
     });
 }
 
-function executeSharedRoll(diceArray, config, seed, simSpeed, destination) {
+function executeSharedRoll(id, diceArray, config, seed, simSpeed, destination) {
     return new Promise((resolve, reject) => {
 
         if (destination !== 'LOCAL') {
             resolve();
         }
         else {
-            const unsubscribe = OBR.broadcast.onMessage("quickdice.api." + rollId, (event) => {
+            const unsubscribe = OBR.broadcast.onMessage("quickdice.api." + id, (event) => {
                 unsubscribe();
                 const result = event.data.result;
                 if (result) {
@@ -144,8 +152,8 @@ function executeSharedRoll(diceArray, config, seed, simSpeed, destination) {
                 }
             });
         }
-        OBR.broadcast.sendMessage("quickdice.popoverRoll", {
-            'id': rollId,
+        const data = {
+            'id': id,
             'playerName': playerName,
             'width': canvasWidth,
             'height': canvasHeight,
@@ -154,7 +162,14 @@ function executeSharedRoll(diceArray, config, seed, simSpeed, destination) {
             'seed': seed,
             'simSpeed': simSpeed,
             'delay': 1500
-        }, { destination }).catch(error => {
+        };
+        const send = destination === 'REMOTE'
+            ? sendRemoteMessage("quickdice.popoverRoll", data)
+            : OBR.broadcast.sendMessage("quickdice.popoverRoll", data, { destination });
+        if (destination === 'REMOTE') {
+            sharedRollId = id;
+        }
+        send.catch(error => {
             console.error("Failed to send broadcast message:", error);
         });
     });
@@ -246,15 +261,15 @@ async function createDiceBox() {
 
     await diceBox.init();
     
-    let debouncedResizeHandler = debounce(async () => {
+    const resizeHandler = async () => {
         await OBR.broadcast.sendMessage("quickdice.popoverViewport", {
             'viewportWidth': window.innerWidth,
             'viewportHeight': window.innerHeight
         }, { destination: 'LOCAL' });
-        resizeCanvas(diceBox);
-    });
-    debouncedResizeHandler();
-    window.addEventListener('resize', () => debouncedResizeHandler());
+        await resizeCanvas(diceBox);
+    };
+    await resizeHandler();
+    window.addEventListener('resize', debounce(resizeHandler));
 
     openPopover();
 
@@ -430,6 +445,8 @@ export async function setupDiceRoller(id) {
     var diceBox = await createDiceBox();
 
     const attackCommandInput = document.getElementById('attackCommand');
+    attackCommandInput.disabled = false;
+    document.getElementById('rollButton').disabled = false;
 
     const examples = [
         '5a+4 vs {ac} dmg {count}d6fi+{bonus}bl+1d4',
@@ -532,9 +549,7 @@ export async function setupDiceRoller(id) {
             return
         }
         blockRollButton = true;
-        setTimeout(() => { blockRollButton = false }, 200);
-
-        clearSharedRoll();
+        setTimeout(() => { blockRollButton = false }, 500);
 
         const userInput = emojiToText(attackCommandInput.value).trim();
         const parseResults = parseInput(userInput);
@@ -552,6 +567,8 @@ export async function setupDiceRoller(id) {
             return;
         }
 
+        clearSharedRoll();
+
         const result = await performAttack(attackParams, diceBox, logState, simState, false);
         if (result) {
             const { attackRolls, damageResults, hpResult } = result;
@@ -567,13 +584,13 @@ export async function setupDiceRoller(id) {
             }
 
             if (logState == "share") {
-                OBR.broadcast.sendMessage("quickdice.diceResults", {
+                sendRemoteMessage("quickdice.diceResults", {
                     'playerName': playerName,
                     'command': cleanedUserInput, 
                     'attackRolls': attackRolls, 
                     'damageResults': damageResults,
                     'hpResult': hpResult
-                }, {destination: 'REMOTE'}).catch(error => {
+                }).catch(error => {
                     console.error("Failed to send broadcast message:", error);
                 });
             }
@@ -646,13 +663,13 @@ export async function setupDiceRoller(id) {
                     }
                 }
                 if (logState == "share") {
-                    OBR.broadcast.sendMessage("quickdice.diceResults", {
+                    sendRemoteMessage("quickdice.diceResults", {
                         'playerName': playerName,
                         'command': cleanedUserInput, 
                         'attackRolls': attackRolls, 
                         'damageResults': damageResults,
                         'hpResult': hpResult
-                    }, {destination: 'REMOTE'}).catch(error => {
+                    }).catch(error => {
                         console.error("Failed to send broadcast message:", error);
                     });
                 }
@@ -814,6 +831,7 @@ async function executeDiceRolls(diceList, diceBox, wait, logState, simState, isE
     } 
     else {
         rollId = uuid();
+        const currentRollId = rollId;
         if (wait) {
             await new Promise(resolve => setTimeout(resolve, 500));
         }
@@ -843,7 +861,7 @@ async function executeDiceRolls(diceList, diceBox, wait, logState, simState, isE
         });
 
         if (simState == "share") {           
-            executeSharedRoll(diceArray, time_config(), seed, simSpeed, 'REMOTE');
+            executeSharedRoll(currentRollId, diceArray, time_config(), seed, simSpeed, 'REMOTE');
         }
 
         isCleared = false;
@@ -854,7 +872,7 @@ async function executeDiceRolls(diceList, diceBox, wait, logState, simState, isE
             rollFunction = () => diceBox.roll(diceArray, {}, seed, simSpeed);
         }
         else {
-            rollFunction = () => executeSharedRoll(diceArray, time_config(), seed, simSpeed, 'LOCAL');
+            rollFunction = () => executeSharedRoll(currentRollId, diceArray, time_config(), seed, simSpeed, 'LOCAL');
         }
         
         try {
@@ -870,8 +888,17 @@ async function executeDiceRolls(diceList, diceBox, wait, logState, simState, isE
                 timeout(12000)
             ]);   
         }
-        catch{
+        catch {
             return null;
+        }
+        finally {
+            if (simState === "share") {
+                setTimeout(() => {
+                    if (sharedRollId === currentRollId) {
+                        sharedRollId = null;
+                    }
+                }, 1500);
+            }
         }
         
         const groupTotals = {};
