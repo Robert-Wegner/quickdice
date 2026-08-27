@@ -8,7 +8,7 @@ tags:
   - dice
   - automation
 manifest: https://quickdice.onrender.com/manifest.json
-learn-more: robert.wegner4@outlook.de
+learn-more: https://github.com/Robert-Wegner/quickdice/blob/main/README.md
 ---
 
 # Quickdice
